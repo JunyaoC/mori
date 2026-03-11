@@ -1,0 +1,9 @@
+{
+  "concierge": [
+    "discord/#general"
+  ],
+  "departments": {},
+  "inbox": "discord/#inbox",
+  "journal": "discord/#journal",
+  "_note": "This map evolves over time. The agent can propose new channels via PRs."
+}
