@@ -2,102 +2,111 @@
 
 ## Goal
 
-A working system where the user talks from any channel (Discord, CLI, or directly on GitHub), the manager agent or department handles it, mutations are reflected in GitHub (office), and conversation continuity is maintained via a local database (scratchpad).
+A working system where every interaction (from any channel) becomes a GitHub Issue, the manager agent processes issues and acts, departments execute specialized work, and the agent can evolve its own system through PRs.
+
+## Core Decisions
+
+- **GitHub is the bus.** Every interaction creates or continues an issue. No exceptions.
+- **DB is a search index**, not a source of truth. Rebuildable from GitHub.
+- **Concierge has channel awareness.** Knows channel topology, routes correctly.
+- **Manager is triggered by GitHub events.** Input = issue. Output = issue comments + actions.
+- **Manager can self-evolve.** Modify prompt, tools, channels, knowledge, models — all via PRs.
+- **Departments are autonomous.** Handle user input directly in department channels.
 
 ## Success Criteria
 
-The following interactions work end-to-end:
-
-1. **Quick question (read-only, DB only)** — "what happened to btc price" → agent answers in-place, conversation stored in DB, no issue created
-2. **Task dispatch (top-down)** — "change footer text from ABC to XYZ" → manager creates issue, spawns coding agent, streams progress to DB, syncs milestones to GitHub issue, reports completion to #inbox
-3. **Direct department interaction (bottom-up)** — user goes to #project-x and says "auth is broken on safari" → department handles it directly, creates issue, opens PR, syncs to office without needing manager
-4. **Cross-channel continuity** — discuss staking in #general, then ask about it in #crypto → DB semantic search finds the prior conversation, GitHub issue links the context
-5. **Conversational memory** — "what did we decide about staking last week?" → DB embedding search retrieves it, even if it was casual chat that never became an issue
-6. **Cron reflection** — hourly journal entry, weekly self-reflection with knowledge PRs
-
-## Architecture Overview
-
-```
-GitHub (Office)     = source of truth, all mutations
-DB (Scratchpad)     = working memory, conversation history, embeddings
-Channels            = concierge (intake) + departments (work)
-Manager             = coordinator (not bottleneck)
-Departments         = autonomous workers, sync back to office
-```
-
-See [docs/architecture.md](../docs/architecture.md) for full details.
+1. **Quick question** — "what's btc price" in #general → issue created, answered, closed in <6s
+2. **Task dispatch** — "change footer to XYZ" → issue created, coding agent spawned, progress on issue, PR opened, #inbox notified on completion
+3. **Bottom-up** — user in #project-x says "auth broken" → department handles directly, creates issue, fixes, PRs
+4. **Cross-channel** — discuss topic in #general, reference it in #project-x → issues linked, context preserved
+5. **Self-evolution** — agent learns preference → PRs to `.agent/knowledge/`, agent notices missing tool → PRs to `.agent/tools/`
+6. **Cron reflection** — hourly journal, weekly self-review
 
 ## Milestones
 
 ### M1: Foundation
-- [ ] GitHub Project Board (columns: Backlog, In Progress, Review, Done)
-- [ ] Label taxonomy: `in-progress`, `needs-attention`, `needs-input`, `bug`, domain labels
+
+- [ ] GitHub Project Board (Backlog / In Progress / Review / Done)
+- [ ] Label taxonomy: `quick`, `in-progress`, `needs-attention`, `needs-input`, `bug`, `incoming`
 - [ ] `.agent/prompt.md` — manager personality
-- [ ] `.agent/channels.json` — workspace map
+- [ ] `.agent/channels.json` — channel topology with types (concierge/department/inbox/journal)
+- [ ] `.agent/models.json` — model tier configuration
 - [ ] `.agent/tools/manifest.json` — tool registry
-- [ ] SQLite database schema (messages, threads, sessions, queue)
-- [ ] Embedding setup (sqlite-vec or similar)
+- [ ] SQLite DB schema (embeddings, thread_map, sessions, scratch)
 
-### M2: Manager Core
-- [ ] Context loader — reads BOTH DB (conversation, semantic search) and GitHub (issues, board, PRs)
-- [ ] Manager agent — LLM with tools, decides what to do
-- [ ] Mutation rule enforcement — mutations → GitHub, reads → DB only
-- [ ] Office tools: create_issue, update_issue, close_issue, add_label, move_card, add_comment, link_issues, create_gist
-- [ ] DB tools: store_message, search_conversations, get_thread_context
-- [ ] Decision logic: quick reply vs. create task vs. continue existing task vs. dispatch to department
+### M2: Concierge
 
-### M3: Discord Adapter
-- [ ] discord.py bot listening to configured channels
-- [ ] Channel registry pattern (borrowed from NanoClaw)
-- [ ] Message normalization to standard format
-- [ ] Route to manager (concierge channels) or department (department channels)
-- [ ] Post responses to correct channels, chunked at 2000 chars
-- [ ] GitHub webhook listener (issue updates → channel notifications)
-- [ ] Typing indicators during LLM processing
+- [ ] Channel adapter contract: `listen()`, `post()`, `reply()`
+- [ ] Channel registry (factory pattern, borrowed from NanoClaw)
+- [ ] Channel-aware routing: read `.agent/channels.json`, route based on channel type
+- [ ] Issue finding: check thread_map in DB → search GitHub → create new
+- [ ] Message recording: every message → issue comment with `[source] @author` prefix
+- [ ] Discord adapter: discord.py, message normalization, 2000-char chunking, typing indicators
 
-### M4: Department — Coding Agent
-- [ ] Spawn claude-code as subprocess (borrowed from PicoClaw's `claude_cli_provider`)
-- [ ] `--output-format stream-json` for structured output capture
-- [ ] Stream all progress to DB in real-time
-- [ ] Sync milestone summaries to GitHub Issue comments
+### M3: Manager Core
+
+- [ ] GitHub event handler (triggered by new issue comments)
+- [ ] Context loader: issue + board + active tasks + related + semantic search
+- [ ] System prompt loader: `.agent/prompt.md` + `.agent/knowledge/*.md` + `.agent/channels.json`
+- [ ] Office tools: create_issue, update_issue, close_issue, add_comment, add/remove_label, move_card, link_issues, assign_issue, create_gist
+- [ ] Communication tools: post_to_channel, notify_inbox, reply
+- [ ] Direct tools: web_search, calculate
+- [ ] Decision logic: quick reply → dispatch → continue → cross-reference → close → evolve
+- [ ] Living summary protocol: create/update on significant changes
+
+### M4: Self-Evolution
+
+- [ ] update_knowledge: PR to `.agent/knowledge/*.md`
+- [ ] update_channels: PR to `.agent/channels.json`
+- [ ] create_tool / modify_tool: PR to `.agent/tools/`
+- [ ] update_prompt: PR to `.agent/prompt.md`
+- [ ] update_model_config: PR to `.agent/models.json`
+- [ ] Governance enforcement: auto-merge (knowledge, channels, tools) vs human review (prompt, models)
+- [ ] Evolution reasoning: every PR includes why the change is proposed
+
+### M5: Department — Coding Agent
+
+- [ ] Spawn claude-code as subprocess (`--output-format stream-json`)
+- [ ] Spawn codex as subprocess (`--json`)
+- [ ] Progress streaming: milestone summaries → issue comments
+- [ ] Artifact pipeline: diffs inline, large logs → gists
 - [ ] PR creation linked to issue
-- [ ] Codex CLI support as alternative (`codex --json`)
-- [ ] Session tracking (session IDs stored in DB for potential resume)
-- [ ] Completion/blocker notification to #inbox
-- [ ] **Bottom-up**: department can handle user messages directly without manager
+- [ ] Session tracking in DB for potential resume
+- [ ] Completion/blocker → notify_inbox
+- [ ] Bottom-up handling: department channels route directly to department
 
-### M5: Department — Research
-- [ ] Web search + summarization
-- [ ] Results streamed to DB, summary posted to GitHub Issue
-- [ ] Auto-close issue when research is complete
-- [ ] **Bottom-up**: user can ask directly in a department channel
+### M6: Department — Research
 
-### M6: Cron + Self-Reflection
-- [ ] GitHub Actions workflow for hourly/daily triggers
-- [ ] Reflection loop — review DB (recent conversations) + GitHub (recent issues)
-- [ ] Journal entry posted to #journal channel + standing GitHub Issue
-- [ ] Knowledge accumulation — update `.agent/knowledge/` via PRs
-- [ ] Self-improvement: identify missing tools, refine prompts
+- [ ] Web search + synthesis
+- [ ] Results as issue comments
+- [ ] Auto-close on completion
+- [ ] Bottom-up: direct interaction in department channels
 
-### M7: Multi-Model
-- [ ] LiteLLM Router integration (borrowed from Nanobot pattern)
-- [ ] Model tiers: fast (haiku/flash), smart (sonnet), cheap (gemini-flash)
-- [ ] Fallback chains with error classification (borrowed from PicoClaw)
-- [ ] Cooldown tracking for failing providers (borrowed from IronClaw)
-- [ ] Manager can choose model tier per-task
+### M7: Cron + Self-Reflection
+
+- [ ] GitHub Actions for hourly/daily triggers
+- [ ] Per-task reflection (on issue close): did I have the right tools? what did I learn?
+- [ ] Weekly meta-reflection: patterns, missing tools, prompt improvements
+- [ ] Journal entries → #journal channel + standing journal issue
+
+### M8: Multi-Model
+
+- [ ] LiteLLM Router integration
+- [ ] Model tiers from `.agent/models.json`: fast, smart, coding
+- [ ] Fallback chains with error classification (PicoClaw pattern)
+- [ ] Cooldown tracking (IronClaw pattern)
 - [ ] Cost tracking per interaction
 
-### M8: Semantic Memory
-- [ ] Embedding generation for all messages (on write)
+### M9: Semantic Memory
+
+- [ ] Embedding generation for issue content
 - [ ] Semantic search tool for manager and departments
-- [ ] "What did we discuss about X?" works across all channels and time
-- [ ] Memory decay — recent conversations weighted higher
-- [ ] Consider Mem0 integration as alternative to DIY embeddings
+- [ ] Memory decay: recent content weighted higher
+- [ ] Mem0 integration as optional backend
 
 ## Non-Goals for v0
 
-- Slack/CLI adapters (Discord + GitHub only for v0)
-- Full self-evolution (agent creating its own tools)
+- Slack/CLI adapters (Discord + GitHub only)
 - Voice channels
 - Browser automation
 - WASM sandboxing
@@ -109,20 +118,20 @@ See [docs/architecture.md](../docs/architecture.md) for full details.
 - **Language**: Python 3.11+ (asyncio)
 - **Discord**: discord.py
 - **GitHub API**: PyGitHub or `gh` CLI
-- **Database**: SQLite + sqlite-vec (embeddings)
-- **LLM**: Claude API direct (v0), LiteLLM Router (M7)
-- **Coding agent**: Claude Code CLI, Codex CLI (subprocess)
-- **Embedding**: OpenAI text-embedding-3-small or local alternative
+- **Database**: SQLite + sqlite-vec (search index only)
+- **LLM**: Claude API (v0), LiteLLM Router (M8)
+- **Coding agents**: Claude Code CLI, Codex CLI (subprocess)
+- **Embedding**: text-embedding-3-small or local
 - **Cron**: GitHub Actions
 
 ## Borrowed Patterns
 
-| Pattern | Source | Used In |
+| Pattern | Source | Milestone |
 |---|---|---|
-| Channel registry (factory-based) | NanoClaw | M3 |
-| CLI agent spawning (claude-code, codex subprocess) | PicoClaw | M4 |
-| Asymmetric error recovery | NanoClaw | M3, M4 |
-| LiteLLM provider registry + retry wrapper | Nanobot | M7 |
-| Fallback chain with error classification | PicoClaw | M7 |
-| Cooldown-aware failover | IronClaw | M7 |
-| Cost tracking + budget guard | IronClaw | M7 |
+| Channel registry (factory) | NanoClaw | M2 |
+| CLI agent spawning (subprocess) | PicoClaw | M5 |
+| Asymmetric error recovery | NanoClaw | M2, M5 |
+| LiteLLM + retry wrapper | Nanobot | M8 |
+| Fallback chain + error classification | PicoClaw | M8 |
+| Cooldown-aware failover | IronClaw | M8 |
+| Cost tracking + budget guard | IronClaw | M8 |

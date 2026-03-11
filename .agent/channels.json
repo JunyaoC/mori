@@ -1,9 +1,17 @@
 {
-  "concierge": [
-    "discord/#general"
-  ],
-  "departments": {},
-  "inbox": "discord/#inbox",
-  "journal": "discord/#journal",
-  "_note": "This map evolves over time. The agent can propose new channels via PRs."
+  "channels": {
+    "discord/#general": {
+      "type": "concierge",
+      "description": "General intake, quick questions, cross-topic"
+    },
+    "discord/#inbox": {
+      "type": "inbox",
+      "description": "Agent posts here when user attention needed"
+    },
+    "discord/#journal": {
+      "type": "journal",
+      "description": "Agent self-reflection and pattern tracking"
+    }
+  },
+  "_note": "Department channels are added by the agent via PRs as needed. Example: discord/#project-x with type=department."
 }

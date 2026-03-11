@@ -2,161 +2,350 @@
 
 ## Role
 
-The manager is the single persistent agent. It is the only LLM that always runs. Everything goes through it.
+The manager is the single persistent brain. It is triggered by GitHub Issue events. Its input is always a GitHub Issue with comments. It never sees raw channel messages — the concierge has already recorded them on an issue.
 
 ## Input
 
-A normalized message from any channel adapter:
+A GitHub Issue with a new comment:
 
 ```python
-Message(
-    content="change footer text from ABC to XYZ",
-    author="jun",
-    source="discord/#general",
-    thread=None,
+ManagerInput(
+    issue_number=72,
+    issue_title="btc price check",
+    issue_labels=["incoming"],
+    latest_comment="**[discord/#general] @jun**: what's btc price",
+    all_comments=[...],  # last N comments
 )
 ```
 
 ## Context Loading
 
-Before every decision, the manager loads current state from GitHub:
+Before every decision, the manager loads:
 
 ```python
-state = {
-    "active":     gh.issues(state="open", label="in-progress"),
-    "blocked":    gh.issues(state="open", label="needs-attention"),
-    "needs_input": gh.issues(state="open", label="needs-input"),
-    "board":      gh.get_project_board(),
-    "open_prs":   gh.pulls(state="open"),
-    "related":    gh.search_issues(extract_keywords(msg)),
-    "channels":   read(".agent/channels.json"),
+context = {
+    # This issue (the immediate context)
+    "issue":       gh.get_issue_with_comments(issue_number, last=20),
+
+    # Global state (what's happening across the system)
+    "board":       gh.get_project_board_summary(),
+    "active":      gh.issues(state="open", label="in-progress"),
+    "blocked":     gh.issues(state="open", label="needs-attention"),
+    "open_prs":    gh.pulls(state="open"),
+
+    # Related context (what might be relevant)
+    "related":     gh.search_issues(extract_keywords(latest_comment)),
+
+    # System config
+    "channels":    read(".agent/channels.json"),
+    "knowledge":   read_all(".agent/knowledge/*.md"),
+
+    # Search aid (from DB)
+    "semantic":    db.search(latest_comment, limit=5),
 }
 ```
 
-## Decision Space
+## Tool Categories
 
-The manager has these tools and decides which to use:
+### 1. Office Tools (GitHub state management)
 
-### Office Tools (state management)
-- `create_issue(title, body, labels)` — new task
-- `update_issue(number, ...)` — modify existing task
-- `close_issue(number)` — complete a task
-- `add_comment(number, body)` — log to task thread
-- `add_label(number, label)` / `remove_label(number, label)` — state transitions
-- `move_card(number, column)` — board management
-- `link_issues(from, to)` — cross-references
-- `assign_issue(number, user)` — needs someone's attention
-- `create_gist(filename, content)` — large artifact storage
+These are the core tools for managing the source of truth.
 
-### Department Tools (dispatch)
-- `spawn_coding_agent(issue, task, agent="claude-code"|"codex")` — coding work
-- `spawn_research(issue, query)` — web research
+```python
+# Task lifecycle
+create_issue(title: str, body: str, labels: list[str]) -> int
+update_issue(number: int, title: str = None, body: str = None, state: str = None)
+close_issue(number: int, summary: str)
 
-### Communication Tools
-- `post_to_channel(channel, content)` — send to specific channel
-- `notify_inbox(content)` — surface to user attention
+# Communication on issues
+add_comment(number: int, body: str)
 
-### Self-Evolution Tools
-- `update_knowledge(file, content)` — update `.agent/knowledge/`
-- `create_tool(name, code, manifest_entry)` — new tool
-- `modify_tool(name, code)` — improve existing tool
+# State transitions
+add_label(number: int, label: str)
+remove_label(number: int, label: str)
+move_card(number: int, column: str)  # "Backlog" | "In Progress" | "Review" | "Done"
+assign_issue(number: int, user: str)
+link_issues(from_number: int, to_number: int)
 
-### Direct Response
-- `reply(content)` — respond in the source channel
-
-## Decision Heuristics
-
-The manager's system prompt includes guidance for common patterns:
-
-### Quick question (no task needed)
-- Factual lookup, simple calculation, brief opinion
-- Reply directly, no issue created
-
-### New task
-- User requests work that takes multiple steps
-- Create issue → label with department → dispatch if appropriate → confirm in source channel
-
-### Continue existing task
-- Message relates to an open issue (keyword match or explicit reference)
-- Add comment to issue → continue work → post in department channel
-
-### Needs attention
-- A department completes work, or something is blocked
-- Post to inbox channel → assign issue to user
-
-### Cross-reference
-- Message in one context is relevant to another task
-- Link issues → add comment noting the connection
-
-## System Prompt Structure
-
-```
-.agent/prompt.md                   — personality, decision heuristics, model preferences
-.agent/knowledge/preferences.md   — learned user preferences
-.agent/knowledge/*.md              — any other accumulated knowledge
-.agent/channels.json               — workspace topology
+# Artifacts
+create_gist(filename: str, content: str) -> str  # returns URL
 ```
 
-All loaded and concatenated into the system prompt for every manager call.
+### 2. Department Tools (dispatch work)
+
+```python
+spawn_coding_agent(
+    issue: int,
+    task: str,
+    repo: str,
+    agent: str = "claude-code",  # or "codex"
+) -> str  # returns session ID
+
+spawn_research(
+    issue: int,
+    query: str,
+) -> str
+```
+
+### 3. Communication Tools (channel output)
+
+```python
+post_to_channel(channel: str, content: str)
+notify_inbox(content: str)
+reply(content: str)  # replies in the source channel of the current issue
+```
+
+### 4. Self-Evolution Tools (system modification)
+
+All self-evolution happens through PRs. The manager proposes changes, governance rules determine if they auto-merge or need review.
+
+```python
+# Knowledge (auto-merge)
+update_knowledge(
+    file: str,          # e.g., "preferences.md"
+    content: str,       # new content
+    reason: str,        # why this change
+)
+
+# Channel map (auto-merge with notification)
+update_channels(
+    changes: dict,      # channel config changes
+    reason: str,
+)
+
+# Tools (auto-merge with notification)
+create_tool(
+    name: str,          # tool name
+    code: str,          # Python source
+    description: str,   # what it does
+    parameters: dict,   # parameter schema
+)
+
+modify_tool(
+    name: str,
+    code: str,
+    reason: str,
+)
+
+# Prompt (requires human review)
+update_prompt(
+    diff_description: str,  # what to change and why
+    new_content: str,       # proposed new prompt.md
+)
+
+# Model config (requires human review)
+update_model_config(
+    changes: dict,
+    reason: str,
+)
+```
+
+### 5. Direct Tools (for quick answers)
+
+```python
+web_search(query: str) -> str
+get_current_time() -> str
+calculate(expression: str) -> str
+```
+
+## Decision Logic
+
+The manager reads the issue and decides what to do. This is the core decision tree:
+
+```
+Read issue + comments
+    │
+    ├── Is this a quick question?
+    │   (factual, lookup, status check, no multi-step work)
+    │   → use direct tools (web_search, etc.)
+    │   → add_comment with answer
+    │   → add_label("quick")
+    │   → close_issue with summary
+    │   → reply in source channel
+    │
+    ├── Is this a new task?
+    │   (multi-step work, needs coding/research/tracking)
+    │   → add_label("in-progress" + domain labels)
+    │   → move_card("In Progress")
+    │   → spawn_coding_agent or spawn_research
+    │   → post_to_channel (department channel)
+    │   → reply in source channel with confirmation + issue link
+    │
+    ├── Is this continuing an existing task?
+    │   (issue already has in-progress label, comments are ongoing)
+    │   → read living summary + recent comments
+    │   → continue work or update dispatch
+    │   → add_comment with update
+    │
+    ├── Does this relate to another issue?
+    │   (found via search or semantic match)
+    │   → link_issues
+    │   → add_comment on related issue noting the connection
+    │
+    ├── Did a department complete work?
+    │   (PR merged, research done, task finished)
+    │   → close_issue with final summary
+    │   → move_card("Done")
+    │   → notify_inbox
+    │
+    ├── Is something blocked?
+    │   → add_label("needs-attention")
+    │   → notify_inbox
+    │
+    └── Did I learn something worth remembering?
+        (user preference, factual correction, pattern)
+        → update_knowledge
+```
+
+## Self-Evolution Scenarios
+
+### Learning a preference
+```
+User: "i prefer non-custodial wallets"
+Manager: (answers the question normally)
+Manager: update_knowledge("preferences.md",
+    append="- prefers non-custodial crypto solutions",
+    reason="user stated preference directly")
+→ PR to .agent/knowledge/preferences.md → auto-merge
+```
+
+### Noticing a missing tool
+```
+Manager: (just did web_search for crypto prices for the 5th time)
+Manager: create_tool(
+    name="crypto_price",
+    code="import httpx\nasync def crypto_price(tokens)...",
+    description="Get live crypto token prices from CoinGecko",
+    parameters={"tokens": {"type": "array"}},
+)
+→ PR adding .agent/tools/crypto_price.py → auto-merge with notification
+```
+
+### Proposing a new channel
+```
+Manager: (user keeps asking crypto questions in #general)
+Manager: update_channels(
+    changes={"discord/#crypto": {"type": "department", "department": "research", "default_labels": ["crypto"]}},
+    reason="user frequently asks crypto questions, dedicated channel would improve organization",
+)
+→ PR to .agent/channels.json → auto-merge with notification
+→ notify_inbox("Proposed new #crypto channel — check PR")
+```
+
+### Refining own prompt
+```
+Manager: (weekly reflection notices it's been too verbose)
+Manager: update_prompt(
+    diff_description="Add principle: be concise, lead with the answer",
+    new_content="...",
+)
+→ PR to .agent/prompt.md → requires human review
+→ notify_inbox("Proposed prompt update — needs your review")
+```
+
+### Changing model preference
+```
+Manager: (notices haiku is failing on certain crypto queries)
+Manager: update_model_config(
+    changes={"tiers.fast.models": ["gemini/gemini-2.5-flash"]},
+    reason="haiku struggles with real-time price queries, gemini-flash handles them better",
+)
+→ PR to .agent/models.json → requires human review
+```
 
 ## Living Summary Protocol
 
-When the manager creates or updates a task, the first comment on the issue is a living summary:
+Every issue gets a living summary as the first comment (or issue body), updated on significant changes:
 
 ```markdown
 ## Status
-[current status]
+in-progress | needs-review | blocked | done
 
-## Context
-[why this task exists, key decisions]
+## Summary
+One-line description of what this is about.
+
+## Key Decisions
+- Decided X because Y (Mar 10)
+- Changed approach to Z (Mar 11)
 
 ## Progress
-[what's been done]
+- [x] Initial research
+- [x] Compared 3 options
+- [ ] Final recommendation
 
-## Open
-[what's still needed]
+## Open Questions
+- What's the risk tolerance?
 
 ## Related
-[linked issues]
-```
+- #65 (SSO feature)
+- #42 (portfolio strategy)
 
-The manager updates this after every significant interaction on the issue.
+## Sessions
+- cc_abc123: initial research (Mar 10)
+- cc_def456: follow-up (Mar 11)
+```
 
 ## Example Flows
 
-### "what happened to btc price"
+### "what's btc price" (quick, seconds)
 
-1. Manager loads state — no related open issues
-2. Decides: quick question, no task needed
-3. Uses web_search tool
-4. Replies directly in source channel
+```
+Concierge: create Issue #80 "btc price check"
+  → comment: [discord/#general] @jun: what's btc price
 
-### "change footer text from ABC to XYZ"
+Manager reads #80:
+  → web_search("bitcoin price current")
+  → add_comment(#80, "$67,420, up 3.2% today")
+  → add_label(#80, "quick")
+  → close_issue(#80, "BTC price: $67,420 (+3.2%)")
+  → reply("$67,420, up 3.2% today")
+```
 
-1. Manager loads state — sees project-x in channels.json
-2. Decides: new task, coding department
-3. Creates Issue #65, label: `in-progress`, board: "In Progress"
-4. Posts to #project-x: "starting footer change — #65"
-5. Replies in #general: "on it, tracking in #project-x #65"
-6. Spawns claude-code on the project repo
-7. Claude-code streams progress → issue comments
-8. On completion: manager updates issue, posts to #inbox
+### "change footer to XYZ" (task, hours)
 
-### "i need a new wallet"
+```
+Concierge: create Issue #81 "change footer text"
+  → comment: [discord/#general] @jun: change footer text from ABC to XYZ
 
-1. Manager loads state — sees shopping in channels.json
-2. Decides: new task, research department
-3. Creates Issue #66, label: `shopping`
-4. Posts to #shopping: "starting wallet research — #66"
-5. Replies in #general: "looking into it, check #shopping"
-6. Spawns research agent
-7. Research posts findings as issue comments + #shopping messages
-8. When done: manager closes issue, posts summary to #inbox
+Manager reads #81:
+  → add_label(#81, "in-progress", "project-x")
+  → move_card(#81, "In Progress")
+  → spawn_coding_agent(#81, "change footer text from ABC to XYZ", repo="junyaoc/project-x")
+  → post_to_channel("discord/#project-x", "starting footer change — #81")
+  → reply("on it — tracking in #project-x as #81")
 
-### User comments directly on GitHub Issue #65
+(claude-code works, posts progress as comments on #81)
 
-1. Webhook fires → manager receives message with source "github/issue/65"
-2. Manager loads issue context
-3. Decides: continue existing task
-4. Acts accordingly
-5. Posts update to #project-x
+Manager reads #81 (on completion):
+  → add_comment(#81, "Footer changed, PR #82 ready")
+  → add_label(#81, "needs-review")
+  → move_card(#81, "Review")
+  → notify_inbox("footer change done — PR #82 needs review")
+```
+
+### User in #project-x: "auth broken" (bottom-up)
+
+```
+Concierge: create Issue #83 "auth broken on safari"
+  → labels: ["incoming", "project-x"]
+  → comment: [discord/#project-x] @jun: auth broken on safari
+
+Department handler (channel type = department):
+  → add_label(#83, "bug", "in-progress")
+  → investigates via coding agent
+  → add_comment(#83, progress updates)
+  → opens PR #84
+  → add_label(#83, "needs-review")
+  → notify_inbox("safari auth fix — PR #84")
+```
+
+### User on GitHub directly
+
+```
+User comments on Issue #81: "also make it bold"
+  → webhook fires
+  → manager_handler(issue=#81)
+  → Manager reads #81 + new comment
+  → continues work, updates department
+  → post_to_channel("discord/#project-x", "new requirement on #81")
+```

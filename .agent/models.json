@@ -1,0 +1,21 @@
+{
+  "tiers": {
+    "fast": {
+      "models": ["anthropic/claude-haiku-4-5", "gemini/gemini-2.5-flash"],
+      "fallback": ["gemini/gemini-2.5-flash"],
+      "use_for": "quick questions, status checks, classification, concierge routing"
+    },
+    "smart": {
+      "models": ["anthropic/claude-sonnet-4-6"],
+      "fallback": ["openai/gpt-4o"],
+      "use_for": "manager decisions, complex reasoning, research synthesis"
+    },
+    "coding": {
+      "agents": ["claude-code", "codex"],
+      "use_for": "spawned as CLI subprocess for coding tasks"
+    }
+  },
+  "manager_default": "smart",
+  "concierge_classify": "fast",
+  "_note": "Agent can propose changes to this file via PR. Model config changes require human review."
+}

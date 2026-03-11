@@ -1,89 +1,84 @@
 # Self-Evolution
 
-mori is not a static system. It grows its own tools, accumulates knowledge, and refines its own behavior — all through the same git workflow as any other code change.
+mori's manager can modify its own system. All changes go through PRs to `.agent/`, giving you version control, diffs, review, and rollback.
 
-## The Three Loops
+## What The Manager Can Evolve
 
-### Loop 1: Per-Interaction (every message)
+| File | What | Example |
+|---|---|---|
+| `.agent/knowledge/*.md` | Learned facts and preferences | "user prefers non-custodial solutions" |
+| `.agent/channels.json` | Channel topology | Add #crypto as a department channel |
+| `.agent/tools/*.py` | Custom tools | Create a `crypto_price` tool to avoid repeated web searches |
+| `.agent/tools/manifest.json` | Tool registry | Register new tool with parameters |
+| `.agent/prompt.md` | Own personality and instructions | "be more concise" |
+| `.agent/models.json` | Model tier configuration | Switch fast tier from haiku to gemini-flash |
 
-Standard operation. Manager reads state, acts, updates issues. No evolution.
+## How It Works
 
-### Loop 2: Per-Task Reflection (when a task closes)
+Every self-evolution tool creates a PR:
 
-When an issue is closed, the manager reflects:
-
-- Did I have the right tools? What was missing?
-- Did I struggle with something I shouldn't have?
-- Did the user correct me on preferences or facts?
-- Should any knowledge files be updated?
-
-If changes are needed, the manager opens a PR to `.agent/`.
-
-### Loop 3: Periodic Meta-Reflection (cron — weekly)
-
-The manager reviews all recent activity and considers:
-
-- Are there recurring tasks that need a dedicated tool?
-- Are any tools underperforming or unused?
-- Are there patterns in user corrections worth codifying?
-- Should the base prompt be updated?
-
-This runs as a GitHub Actions cron job.
-
-## What Evolves
-
-### Tools
-
-Tools are scripts in `.agent/tools/`. The agent writes them:
-
+```python
+# Manager notices user always asks for non-custodial options
+update_knowledge(
+    file="preferences.md",
+    content="- prefers non-custodial crypto solutions\n",
+    reason="user stated preference in issue #42",
+)
+# → creates branch: agent/knowledge-update-{timestamp}
+# → commits change to .agent/knowledge/preferences.md
+# → opens PR with reason in description
+# → governance rules determine merge behavior
 ```
-1. Agent encounters a need
-   "I keep searching crypto prices via web_search — slow and expensive"
-
-2. Agent creates a tool
-   → writes .agent/tools/price_check.py
-   → updates manifest.json
-   → opens PR with rationale
-
-3. Agent uses the tool in future tasks
-
-4. Agent improves the tool when it breaks
-   → PR with diff + reasoning
-```
-
-### Knowledge
-
-`.agent/knowledge/` accumulates learned facts:
-
-- `preferences.md` — user preferences learned over time
-- `sources.md` — which data sources are reliable
-- Any other knowledge files the agent creates
-
-### Prompt
-
-`.agent/prompt.md` is the agent's personality and instructions. It can propose changes to itself — model selection heuristics, communication style, decision-making rules.
-
-### Workspace Map
-
-`.agent/channels.json` maps the channel topology. When the user adds a new channel or changes how channels are used, the agent updates this.
 
 ## Governance
 
-Not everything auto-merges:
-
-| Risk level | What | Action |
+| Risk | What | Merge Policy |
 |---|---|---|
-| Low | Knowledge updates (learned preferences) | Auto-merge |
-| Medium | New tool creation, prompt refinements | Auto-merge with notification |
-| High | Base prompt changes, tool deletion, model changes | Requires human review |
+| Low | Knowledge updates (preferences, facts) | Auto-merge |
+| Medium | New tools, tool changes, channel map updates | Auto-merge + notification to #inbox |
+| High | Prompt changes, model config changes, tool deletion | Requires human review, notification to #inbox |
 
-This is enforced via GitHub branch protection rules and PR labels.
+Governance is enforced via GitHub branch protection rules and PR labels:
+- Label `auto-merge` → CI merges after checks pass
+- Label `needs-review` → waits for human approval
+- All PRs notify #inbox regardless
+
+## The Three Reflection Loops
+
+### Loop 1: Per-Interaction
+
+During normal operation. If the manager notices something worth remembering (user correction, stated preference, repeated pattern), it calls the appropriate evolution tool immediately.
+
+### Loop 2: Per-Task (on issue close)
+
+When an issue is closed, the manager reflects:
+
+- Did I have the right tools for this? → `create_tool` if not
+- Did the user correct me? → `update_knowledge`
+- Was I slow or awkward at anything? → consider `update_prompt`
+- Is there a related channel that should exist? → `update_channels`
+
+### Loop 3: Periodic Meta-Reflection (cron)
+
+Weekly GitHub Actions trigger. Manager reviews recent closed issues and considers:
+
+- Recurring task patterns that need dedicated tools
+- Underperforming or unused tools to remove
+- Prompt refinements based on accumulated feedback
+- Model tier adjustments based on performance patterns
+
+Results posted to #journal and standing reflection issue.
 
 ## Evolution Record
 
-The git history of `.agent/` IS the evolution record. You can:
+`git log .agent/` is the full evolution history:
 
-- `git log .agent/tools/` — see when each tool was created and why
-- `git log .agent/knowledge/` — see what the agent has learned over time
-- `git log .agent/prompt.md` — see how the agent's personality has evolved
-- `git diff` any two points — see exactly what changed and why
+```
+git log --oneline .agent/
+a1b2c3d update knowledge: user prefers non-custodial (from #42)
+d4e5f6g create tool: crypto_price (avoid repeated web searches)
+h7i8j9k update channels: add #crypto department
+l0m1n2o update prompt: add "be concise" principle (weekly reflection)
+```
+
+Every change has a reason. Every change is reversible. The system's growth is fully auditable.
